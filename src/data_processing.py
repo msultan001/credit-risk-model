@@ -261,12 +261,28 @@ class DataPreprocessor:
         # Store feature columns
         self.feature_columns = feature_cols
         
-        # Train-test split with stratification
+        # Determine if stratification is safe
+        n_samples = len(X)
+        n_test_samples = int(n_samples * test_size)
+        n_train_samples = n_samples - n_test_samples
+        
+        # Check if we have enough samples for stratification
+        # Need at least 2 samples per class in both train and test
+        can_stratify = True
+        if n_test_samples < 2 or n_train_samples < 2:
+            can_stratify = False
+        else:
+            # Check class distribution
+            class_counts = y.value_counts()
+            if class_counts.min() < 2:
+                can_stratify = False
+        
+        # Train-test split with conditional stratification
         X_train, X_test, y_train, y_test = train_test_split(
             X, y,
             test_size=test_size,
             random_state=random_state,
-            stratify=y
+            stratify=y if can_stratify else None
         )
         
         print(f"Training set: {X_train.shape}, Test set: {X_test.shape}")
