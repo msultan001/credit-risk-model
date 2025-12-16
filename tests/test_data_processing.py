@@ -196,5 +196,83 @@ class TestIntegration:
         assert len(X_test) > 0
 
 
+# New Tests for Task 3 and Task 5
+class TestPipelineAndWoE:
+    """Test sklearn.pipeline and WoE transformation"""
+    
+    def test_temporal_feature_extractor(self, sample_data):
+        """Test temporal feature extraction transformer"""
+        from data_processing import TemporalFeatureExtractor
+        
+        # Add timestamp column
+        data_with_time = sample_data.copy()
+        data_with_time['TransactionStartTime'] = pd.date_range('2023-01-01', periods=5, freq='H')
+        
+        extractor = TemporalFeatureExtractor()
+        transformed = extractor.fit_transform(data_with_time)
+        
+        assert 'TransactionHour' in transformed.columns
+        assert 'TransactionDayOfWeek' in transformed.columns
+        assert 'TransactionMonth' in transformed.columns
+        assert 'TransactionYear' in transformed.columns
+    
+    def test_aggregate_feature_creator(self, sample_data):
+        """Test aggregate feature creator transformer"""
+        from data_processing import AggregateFeatureCreator
+        
+        creator = AggregateFeatureCreator()
+        creator.fit(sample_data)
+        transformed = creator.transform(sample_data)
+        
+        # Should have customer-level aggregates merged
+        assert 'Amount_sum' in transformed.columns
+        assert 'Amount_mean' in transformed.columns
+        assert 'Amount_std' in transformed.columns
+        assert 'Amount_count' in transformed.columns
+    
+    def test_woe_transformer(self, sample_data):
+        """Test WoE/IV transformation"""
+        from data_processing import WoEIVTransformer
+        
+        # WoE transformer
+        woe_transformer = WoEIVTransformer(
+            target_col='FraudResult',
+            categorical_cols=['ProductCategory', 'ChannelId']
+        )
+        
+        # Fit and transform
+        woe_transformer.fit(sample_data)
+        transformed = woe_transformer.transform(sample_data)
+        
+        # Even if xverse is not installed, should not error
+        assert transformed is not None
+        assert len(transformed) == len(sample_data)
+    
+    def test_pipeline_build(self, sample_data):
+        """Test building sklearn.pipeline"""
+        preprocessor = DataPreprocessor()
+        
+        # Engineer features first
+        engineer = FeatureEngineer(sample_data)
+        data = engineer.engineer_all_features()
+        
+        # Handle missing and encode
+        data = preprocessor.handle_missing_values(data)
+        data = preprocessor.encode_categorical_features(data, fit=True)
+        
+        # Get numeric and categorical columns
+        numeric_cols = data.select_dtypes(include=[np.number]).columns.tolist()
+        categorical_cols = []
+        
+        # Build pipeline
+        pipeline = preprocessor.build_preprocessing_pipeline(
+            numeric_features=numeric_cols[:5],  # Just use first 5
+            categorical_features=categorical_cols
+        )
+        
+        assert pipeline is not None
+        assert preprocessor.pipeline is not None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

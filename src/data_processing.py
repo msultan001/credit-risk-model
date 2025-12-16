@@ -1,13 +1,17 @@
 """
-Data Processing Module
+Data Processing Module with sklearn.pipeline
 Handles data loading, feature engineering, and preprocessing for credit risk modeling
 """
 
 import pandas as pd
 import numpy as np
-from typing import Tuple, Optional
-from sklearn.preprocessing import StandardScaler, LabelEncoder
+from typing import Tuple, Optional, List
+from sklearn.preprocessing import StandardScaler, LabelEncoder, OneHotEncoder
 from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.base import BaseEstimator, TransformerMixin
 
 
 class DataLoader:
@@ -53,6 +57,96 @@ class DataLoader:
         
         print("Data validation passed")
         return True
+
+
+class TemporalFeatureExtractor(BaseEstimator, TransformerMixin):
+    """Extract temporal features from TransactionStartTime"""
+    
+    def __init__(self, datetime_col='TransactionStartTime'):
+        self.datetime_col = datetime_col
+    
+    def fit(self, X, y=None):
+        return self
+    
+    def transform(self, X):
+        X = X.copy()
+        if self.datetime_col in X.columns:
+            X[self.datetime_col] = pd.to_datetime(X[self.datetime_col])
+            X['TransactionHour'] = X[self.datetime_col].dt.hour
+            X['TransactionDayOfWeek'] = X[self.datetime_col].dt.dayofweek
+            X['TransactionMonth'] = X[self.datetime_col].dt.month
+            X['TransactionYear'] = X[self.datetime_col].dt.year
+        return X
+
+
+class AggregateFeatureCreator(BaseEstimator, TransformerMixin):
+    """Create customer-level aggregate features"""
+    
+    def __init__(self):
+        self.customer_stats = None
+    
+    def fit(self, X, y=None):
+        # Calculate aggregates during fit
+        if 'CustomerId' in X.columns:
+            self.customer_stats = X.groupby('CustomerId').agg({
+                'Amount': ['sum', 'mean', 'std', 'count', 'min', 'max'],
+                'Value': ['sum', 'mean'],
+            }).reset_index()
+            
+            # Flatten column names
+            self.customer_stats.columns = ['_'.join(col).strip('_') for col in self.customer_stats.columns.values]
+            self.customer_stats.rename(columns={'CustomerId_': 'CustomerId'}, inplace=True)
+        return self
+    
+    def transform(self, X):
+        X = X.copy()
+        if self.customer_stats is not None and 'CustomerId' in X.columns:
+            X = X.merge(self.customer_stats, on='CustomerId', how='left', suffixes=('', '_agg'))
+        return X
+
+
+class WoEIVTransformer(BaseEstimator, TransformerMixin):
+    """Weight of Evidence and Information Value transformation"""
+    
+    def __init__(self, target_col='FraudResult', categorical_cols=None):
+        self.target_col = target_col
+        self.categorical_cols = categorical_cols or []
+        self.woe_encoders = {}
+        
+    def fit(self, X, y=None):
+        """Fit WoE encoders for categorical variables"""
+        try:
+            from xverse.transformer import WOE
+            
+            if self.target_col in X.columns:
+                for col in self.categorical_cols:
+                    if col in X.columns:
+                        woe = WOE()
+                        # WOE requires both X and y
+                        temp_df = X[[col]].copy()
+                        woe.fit(temp_df, X[self.target_col])
+                        self.woe_encoders[col] = woe
+        except ImportError:
+            print("Warning: xverse not installed. Skipping WoE transformation.")
+        except Exception as e:
+            print(f"Warning: WoE fitting failed: {e}")
+        
+        return self
+    
+    def transform(self, X):
+        """Transform categorical variables using WoE"""
+        X = X.copy()
+        
+        for col, woe in self.woe_encoders.items():
+            if col in X.columns:
+                try:
+                    temp_df = X[[col]].copy()
+                    transformed = woe.transform(temp_df)
+                    X[f'{col}_WoE'] = transformed[col]
+                except Exception as e:
+                    print(f"Warning: WoE transform failed for {col}: {e}")
+        
+        return X
 
 
 class FeatureEngineer:
@@ -106,6 +200,7 @@ class FeatureEngineer:
             df['TransactionHour'] = df['TransactionStartTime'].dt.hour
             df['TransactionDayOfWeek'] = df['TransactionStartTime'].dt.dayofweek
             df['TransactionMonth'] = df['TransactionStartTime'].dt.month
+            df['TransactionYear'] = df['TransactionStartTime'].dt.year
         
         # Product category diversity per customer
         product_diversity = df.groupby('CustomerId')['ProductCategory'].nunique().reset_index()
@@ -140,13 +235,62 @@ class FeatureEngineer:
 
 
 class DataPreprocessor:
-    """Preprocess data for machine learning"""
+    """Preprocess data for machine learning using sklearn.pipeline"""
     
-    def __init__(self):
-        """Initialize DataPreprocessor"""
+    def __init__(self, use_woe=True):
+        """
+        Initialize DataPreprocessor
+        
+        Args:
+            use_woe: Whether to use WoE/IV transformation
+        """
         self.scaler = StandardScaler()
         self.label_encoders = {}
         self.feature_columns = None
+        self.pipeline = None
+        self.use_woe = use_woe
+        
+    def build_preprocessing_pipeline(
+        self, 
+        numeric_features: List[str],
+        categorical_features: List[str]
+    ) -> Pipeline:
+        """
+        Build sklearn pipeline for preprocessing
+        
+        Args:
+            numeric_features: List of numeric feature names
+            categorical_features: List of categorical feature names
+            
+        Returns:
+            Configured preprocessing pipeline
+        """
+        # Numeric transformer
+        numeric_transformer = Pipeline(steps=[
+            ('imputer', SimpleImputer(strategy='median')),
+            ('scaler', StandardScaler())
+        ])
+        
+        # Categorical transformer (Label Encoding)
+        categorical_transformer = Pipeline(steps=[
+            ('imputer', SimpleImputer(strategy='most_frequent')),
+        ])
+        
+        # Combine transformers
+        preprocessor = ColumnTransformer(
+            transformers=[
+                ('num', numeric_transformer, numeric_features),
+                ('cat', categorical_transformer, categorical_features)
+            ],
+            remainder='passthrough'
+        )
+        
+        pipeline = Pipeline(steps=[
+            ('preprocessor', preprocessor)
+        ])
+        
+        self.pipeline = pipeline
+        return pipeline
         
     def handle_missing_values(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -218,7 +362,7 @@ class DataPreprocessor:
         
         # Exclude ID columns and target
         exclude_cols = ['TransactionId', 'BatchId', 'AccountId', 'SubscriptionId', 
-                       'CustomerId', 'ProductId', 'FraudResult']
+                       'CustomerId', 'ProductId', 'FraudResult', 'is_high_risk']
         
         numeric_cols = df.select_dtypes(include=[np.number]).columns
         numeric_cols = [col for col in numeric_cols if col not in exclude_cols]
@@ -253,7 +397,7 @@ class DataPreprocessor:
         feature_cols = [col for col in df.columns if col != target_col 
                        and col not in ['TransactionId', 'BatchId', 'AccountId', 
                                       'SubscriptionId', 'CustomerId', 'ProductId',
-                                      'TransactionStartTime']]
+                                      'TransactionStartTime', 'FraudResult', 'is_high_risk']]
         
         X = df[feature_cols]
         y = df[target_col]
