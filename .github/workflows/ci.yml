@@ -28,7 +28,6 @@ jobs:
       run: |
         pip install flake8
         flake8 src/ api/ tests/ --max-line-length=120 --ignore=E501,W503
-      continue-on-error: true
     
     - name: Run unit tests
       run: |
