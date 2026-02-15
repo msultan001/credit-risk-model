@@ -1,56 +1,62 @@
 """
-Data Processing Module with sklearn.pipeline
-Handles data loading, feature engineering, and preprocessing for credit risk modeling
+Data Processing Module
+Handles data loading, feature engineering, and preprocessing for credit risk modeling.
+Refactored to use centralized configuration and improved type hinting.
 """
 
 import pandas as pd
 import numpy as np
-from typing import Tuple, Optional, List
-from sklearn.preprocessing import StandardScaler, LabelEncoder, OneHotEncoder
+from typing import Tuple, Optional, List, Union
+from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.base import BaseEstimator, TransformerMixin
 
+from src.config import settings
 
 class DataLoader:
-    """Load and validate raw transaction data"""
+    """Load and validate raw transaction data."""
     
-    def __init__(self, filepath: str):
+    def __init__(self, filepath: str = str(settings.RAW_DATA_PATH)):
         """
-        Initialize DataLoader
+        Initialize DataLoader.
         
         Args:
-            filepath: Path to CSV data file
+            filepath: Path to CSV data file. Defaults to settings.RAW_DATA_PATH.
         """
         self.filepath = filepath
-        self.data = None
+        self.data: Optional[pd.DataFrame] = None
         
     def load_data(self) -> pd.DataFrame:
         """
-        Load data from CSV file
+        Load data from CSV file.
         
         Returns:
-            DataFrame with raw data
+            pd.DataFrame: DataFrame with raw data.
         """
-        self.data = pd.read_csv(self.filepath)
-        print(f"Loaded {len(self.data)} transactions from {self.filepath}")
-        return self.data
+        try:
+            self.data = pd.read_csv(self.filepath)
+            print(f"Loaded {len(self.data)} transactions from {self.filepath}")
+            return self.data
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Data file not found at {self.filepath}")
     
     def validate_data(self) -> bool:
         """
-        Validate data structure and required columns
+        Validate data structure and required columns.
         
         Returns:
-            True if validation passes
+            bool: True if validation passes.
+            
+        Raises:
+            ValueError: If required columns are missing.
         """
-        required_columns = [
-            'TransactionId', 'Amount', 'Value', 'FraudResult',
-            'ProductCategory', 'ChannelId', 'ProviderId'
-        ]
-        
-        missing_cols = [col for col in required_columns if col not in self.data.columns]
+        if self.data is None:
+            raise ValueError("Data not loaded. Call load_data() first.")
+            
+        missing_cols = [col for col in settings.REQUIRED_COLUMNS if col not in self.data.columns]
         
         if missing_cols:
             raise ValueError(f"Missing required columns: {missing_cols}")
@@ -60,15 +66,15 @@ class DataLoader:
 
 
 class TemporalFeatureExtractor(BaseEstimator, TransformerMixin):
-    """Extract temporal features from TransactionStartTime"""
+    """Extract temporal features from datetime column."""
     
-    def __init__(self, datetime_col='TransactionStartTime'):
+    def __init__(self, datetime_col: str = settings.DATE_COL):
         self.datetime_col = datetime_col
     
-    def fit(self, X, y=None):
+    def fit(self, X: pd.DataFrame, y=None):
         return self
     
-    def transform(self, X):
+    def transform(self, X: pd.DataFrame) -> pd.DataFrame:
         X = X.copy()
         if self.datetime_col in X.columns:
             X[self.datetime_col] = pd.to_datetime(X[self.datetime_col])
@@ -80,25 +86,30 @@ class TemporalFeatureExtractor(BaseEstimator, TransformerMixin):
 
 
 class AggregateFeatureCreator(BaseEstimator, TransformerMixin):
-    """Create customer-level aggregate features"""
+    """Create customer-level aggregate features."""
     
     def __init__(self):
-        self.customer_stats = None
+        self.customer_stats: Optional[pd.DataFrame] = None
     
-    def fit(self, X, y=None):
+    def fit(self, X: pd.DataFrame, y=None):
         # Calculate aggregates during fit
         if 'CustomerId' in X.columns:
-            self.customer_stats = X.groupby('CustomerId').agg({
-                'Amount': ['sum', 'mean', 'std', 'count', 'min', 'max'],
-                'Value': ['sum', 'mean'],
-            }).reset_index()
-            
-            # Flatten column names
-            self.customer_stats.columns = ['_'.join(col).strip('_') for col in self.customer_stats.columns.values]
-            self.customer_stats.rename(columns={'CustomerId_': 'CustomerId'}, inplace=True)
+            # Check which columns exist before aggregating
+            agg_dict = {}
+            if 'Amount' in X.columns:
+                agg_dict['Amount'] = ['sum', 'mean', 'std', 'count', 'min', 'max']
+            if 'Value' in X.columns:
+                agg_dict['Value'] = ['sum', 'mean']
+                
+            if agg_dict:
+                self.customer_stats = X.groupby('CustomerId').agg(agg_dict).reset_index()
+                
+                # Flatten column names
+                self.customer_stats.columns = ['_'.join(col).strip('_') for col in self.customer_stats.columns.values]
+                self.customer_stats.rename(columns={'CustomerId_': 'CustomerId'}, inplace=True)
         return self
     
-    def transform(self, X):
+    def transform(self, X: pd.DataFrame) -> pd.DataFrame:
         X = X.copy()
         if self.customer_stats is not None and 'CustomerId' in X.columns:
             X = X.merge(self.customer_stats, on='CustomerId', how='left', suffixes=('', '_agg'))
@@ -106,15 +117,18 @@ class AggregateFeatureCreator(BaseEstimator, TransformerMixin):
 
 
 class WoEIVTransformer(BaseEstimator, TransformerMixin):
-    """Weight of Evidence and Information Value transformation"""
+    """Weight of Evidence and Information Value transformation."""
     
-    def __init__(self, target_col='FraudResult', categorical_cols=None):
+    def __init__(self, target_col: str = settings.TARGET_COL, categorical_cols: List[str] = None):
         self.target_col = target_col
-        self.categorical_cols = categorical_cols or []
+        self.categorical_cols = categorical_cols or settings.CATEGORICAL_COLS
         self.woe_encoders = {}
         
-    def fit(self, X, y=None):
-        """Fit WoE encoders for categorical variables"""
+    def fit(self, X: pd.DataFrame, y: Optional[pd.Series] = None):
+        """Fit WoE encoders for categorical variables."""
+        if not settings.USE_WOE:
+            return self
+            
         try:
             from xverse.transformer import WOE
             
@@ -122,10 +136,23 @@ class WoEIVTransformer(BaseEstimator, TransformerMixin):
                 for col in self.categorical_cols:
                     if col in X.columns:
                         woe = WOE()
-                        # WOE requires both X and y
-                        temp_df = X[[col]].copy()
-                        woe.fit(temp_df, X[self.target_col])
-                        self.woe_encoders[col] = woe
+                        # WOE requires both X and y. Here X usually contains target if passed as single DF
+                        # But standard sklearn fit takes X, y.
+                        # We'll assume if y is None, target is in X, otherwise use y.
+                        
+                        if y is None:
+                            target = X[self.target_col]
+                            features = X[[col]]
+                        else:
+                            target = y
+                            features = X[[col]]
+
+                        try:
+                            woe.fit(features, target)
+                            self.woe_encoders[col] = woe
+                        except Exception as e:
+                             print(f"Failed to fit WoE for {col}: {e}")
+
         except ImportError:
             print("Warning: xverse not installed. Skipping WoE transformation.")
         except Exception as e:
@@ -133,8 +160,11 @@ class WoEIVTransformer(BaseEstimator, TransformerMixin):
         
         return self
     
-    def transform(self, X):
-        """Transform categorical variables using WoE"""
+    def transform(self, X: pd.DataFrame) -> pd.DataFrame:
+        """Transform categorical variables using WoE."""
+        if not self.woe_encoders:
+            return X
+            
         X = X.copy()
         
         for col, woe in self.woe_encoders.items():
@@ -142,7 +172,12 @@ class WoEIVTransformer(BaseEstimator, TransformerMixin):
                 try:
                     temp_df = X[[col]].copy()
                     transformed = woe.transform(temp_df)
-                    X[f'{col}_WoE'] = transformed[col]
+                    # Check if transformed is a DataFrame or key-value
+                    if isinstance(transformed, pd.DataFrame):
+                         # xverse usually returns the dataframe with replaced values or new columns
+                         # We want to add a specific column
+                         if col in transformed.columns:
+                             X[f'{col}_WoE'] = transformed[col]
                 except Exception as e:
                     print(f"Warning: WoE transform failed for {col}: {e}")
         
@@ -150,104 +185,80 @@ class WoEIVTransformer(BaseEstimator, TransformerMixin):
 
 
 class FeatureEngineer:
-    """Create derived features for credit risk modeling"""
+    """Create derived features for credit risk modeling."""
     
     def __init__(self, data: pd.DataFrame):
-        """
-        Initialize FeatureEngineer
-        
-        Args:
-            data: Input DataFrame
-        """
         self.data = data.copy()
         
-    def create_customer_aggregates(self) -> pd.DataFrame:
-        """
-        Create customer-level aggregated features
-        
-        Returns:
-            DataFrame with customer aggregates
-        """
-        # Customer transaction statistics
-        customer_stats = self.data.groupby('CustomerId').agg({
-            'Amount': ['sum', 'mean', 'std', 'count', 'min', 'max'],
-            'Value': ['sum', 'mean'],
-            'FraudResult': ['sum', 'mean']
-        }).reset_index()
-        
-        # Flatten column names
-        customer_stats.columns = ['_'.join(col).strip('_') for col in customer_stats.columns.values]
-        customer_stats.rename(columns={'CustomerId_': 'CustomerId'}, inplace=True)
-        
-        return customer_stats
-    
     def create_transaction_features(self) -> pd.DataFrame:
-        """
-        Create transaction-level features
-        
-        Returns:
-            DataFrame with new features
-        """
+        """Create transaction-level features."""
         df = self.data.copy()
         
         # Amount vs Value difference (fees/markup)
-        df['AmountValueDiff'] = df['Value'] - df['Amount']
-        df['AmountValueRatio'] = df['Value'] / (df['Amount'] + 1)  # Avoid division by zero
+        if 'Value' in df.columns and 'Amount' in df.columns:
+            df['AmountValueDiff'] = df['Value'] - df['Amount']
+            df['AmountValueRatio'] = df['Value'] / (df['Amount'] + 1)  # Avoid division by zero
         
+        # Interaction Features
+        if settings.CREATE_INTERACTION_FEATURES and 'PricingStrategy' in df.columns and 'Amount' in df.columns:
+             df['Amount_Pricing_Interaction'] = df['Amount'] * df['PricingStrategy']
+
         # Time-based features
-        if 'TransactionStartTime' in df.columns:
-            df['TransactionStartTime'] = pd.to_datetime(df['TransactionStartTime'])
-            df['TransactionHour'] = df['TransactionStartTime'].dt.hour
-            df['TransactionDayOfWeek'] = df['TransactionStartTime'].dt.dayofweek
-            df['TransactionMonth'] = df['TransactionStartTime'].dt.month
-            df['TransactionYear'] = df['TransactionStartTime'].dt.year
+        if settings.DATE_COL in df.columns:
+            df[settings.DATE_COL] = pd.to_datetime(df[settings.DATE_COL])
+            df['TransactionHour'] = df[settings.DATE_COL].dt.hour
+            df['TransactionDayOfWeek'] = df[settings.DATE_COL].dt.dayofweek
+            df['TransactionMonth'] = df[settings.DATE_COL].dt.month
+            df['TransactionYear'] = df[settings.DATE_COL].dt.year
         
         # Product category diversity per customer
-        product_diversity = df.groupby('CustomerId')['ProductCategory'].nunique().reset_index()
-        product_diversity.columns = ['CustomerId', 'ProductDiversity']
-        df = df.merge(product_diversity, on='CustomerId', how='left')
+        if 'CustomerId' in df.columns and 'ProductCategory' in df.columns:
+            product_diversity = df.groupby('CustomerId')['ProductCategory'].nunique().reset_index()
+            product_diversity.columns = ['CustomerId', 'ProductDiversity']
+            df = df.merge(product_diversity, on='CustomerId', how='left')
         
         return df
     
     def engineer_all_features(self) -> pd.DataFrame:
-        """
-        Apply all feature engineering steps
-        
-        Returns:
-            DataFrame with engineered features
-        """
+        """Apply all feature engineering steps."""
         # Transaction-level features
         df = self.create_transaction_features()
         
-        # Customer aggregates
-        customer_agg = self.create_customer_aggregates()
-        
-        # Merge customer aggregates back to transaction level
-        df = df.merge(
-            customer_agg,
-            on='CustomerId',
-            how='left',
-            suffixes=('', '_cust')
-        )
+        # Use simple aggregation for compatibility with existing tests/logic
+        # For more complex pipelines, use AggregateFeatureCreator
+        if 'CustomerId' in df.columns:
+             agg_cols = {}
+             if 'Amount' in df.columns:
+                 agg_cols['Amount'] = ['sum', 'mean', 'std', 'count', 'min', 'max']
+             if 'Value' in df.columns:
+                 agg_cols['Value'] = ['sum', 'mean']
+             if 'FraudResult' in df.columns:
+                 agg_cols['FraudResult'] = ['sum', 'mean']
+             
+             if agg_cols:
+                customer_stats = df.groupby('CustomerId').agg(agg_cols).reset_index()
+                customer_stats.columns = ['_'.join(col).strip('_') for col in customer_stats.columns.values]
+                customer_stats.rename(columns={'CustomerId_': 'CustomerId'}, inplace=True)
+                
+                df = df.merge(
+                    customer_stats,
+                    on='CustomerId',
+                    how='left',
+                    suffixes=('', '_cust')
+                )
         
         print(f"Feature engineering complete: {df.shape[1]} features")
         return df
 
 
 class DataPreprocessor:
-    """Preprocess data for machine learning using sklearn.pipeline"""
+    """Preprocess data for machine learning using sklearn.pipeline."""
     
-    def __init__(self, use_woe=True):
-        """
-        Initialize DataPreprocessor
-        
-        Args:
-            use_woe: Whether to use WoE/IV transformation
-        """
+    def __init__(self, use_woe: bool = settings.USE_WOE):
         self.scaler = StandardScaler()
         self.label_encoders = {}
-        self.feature_columns = None
-        self.pipeline = None
+        self.feature_columns: Optional[List[str]] = None
+        self.pipeline: Optional[Pipeline] = None
         self.use_woe = use_woe
         
     def build_preprocessing_pipeline(
@@ -255,28 +266,24 @@ class DataPreprocessor:
         numeric_features: List[str],
         categorical_features: List[str]
     ) -> Pipeline:
-        """
-        Build sklearn pipeline for preprocessing
+        """Build sklearn pipeline for preprocessing."""
         
-        Args:
-            numeric_features: List of numeric feature names
-            categorical_features: List of categorical feature names
-            
-        Returns:
-            Configured preprocessing pipeline
-        """
         # Numeric transformer
         numeric_transformer = Pipeline(steps=[
             ('imputer', SimpleImputer(strategy='median')),
             ('scaler', StandardScaler())
         ])
         
-        # Categorical transformer (Label Encoding)
+        # Categorical transformer (Label Encoding logic is custom, but for pipeline we can use generic)
+        # For sklearn pipeline compatibility, usually OneHotEncoder or OrdinalEncoder is used.
+        # But existing code used LabelEncoding. We will keep it simple here.
+        # This function was illustrative in original code.
+        
         categorical_transformer = Pipeline(steps=[
             ('imputer', SimpleImputer(strategy='most_frequent')),
+            # We would typically add encoding here
         ])
         
-        # Combine transformers
         preprocessor = ColumnTransformer(
             transformers=[
                 ('num', numeric_transformer, numeric_features),
@@ -293,15 +300,7 @@ class DataPreprocessor:
         return pipeline
         
     def handle_missing_values(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Handle missing values
-        
-        Args:
-            df: Input DataFrame
-            
-        Returns:
-            DataFrame with imputed values
-        """
+        """Handle missing values."""
         df = df.copy()
         
         # Fill numeric missing values with median
@@ -314,59 +313,46 @@ class DataPreprocessor:
         categorical_cols = df.select_dtypes(include=['object']).columns
         for col in categorical_cols:
             if df[col].isnull().any():
-                df[col].fillna(df[col].mode()[0], inplace=True)
+                df[col].fillna(df[col].mode()[0] if not df[col].mode().empty else 'unknown', inplace=True)
         
         return df
     
     def encode_categorical_features(self, df: pd.DataFrame, fit: bool = True) -> pd.DataFrame:
-        """
-        Encode categorical variables
-        
-        Args:
-            df: Input DataFrame
-            fit: Whether to fit encoders (True for training, False for inference)
-            
-        Returns:
-            DataFrame with encoded features
-        """
+        """Encode categorical variables."""
         df = df.copy()
         
-        categorical_cols = ['ProductCategory', 'ChannelId', 'ProviderId', 'CurrencyCode', 'CountryCode']
-        categorical_cols = [col for col in categorical_cols if col in df.columns]
+        categorical_cols = [col for col in settings.CATEGORICAL_COLS if col in df.columns]
         
         for col in categorical_cols:
             if fit:
                 self.label_encoders[col] = LabelEncoder()
+                # Ensure strings
                 df[col] = self.label_encoders[col].fit_transform(df[col].astype(str))
             else:
-                # Handle unseen categories
-                df[col] = df[col].astype(str).apply(
-                    lambda x: x if x in self.label_encoders[col].classes_ else 'unknown'
-                )
-                df[col] = self.label_encoders[col].transform(df[col])
+                if col in self.label_encoders:
+                    # Handle unseen categories
+                    # Note: LabelEncoder isn't great for unseen data.
+                    # Best practice: use a dedicated category encoder or handle 'unknown'.
+                    # Here we map unknown to a known class or error, but let's try to handle gracefully.
+                    known_classes = set(self.label_encoders[col].classes_)
+                    df[col] = df[col].astype(str).apply(lambda x: x if x in known_classes else list(known_classes)[0]) # Fallback to first class
+                    df[col] = self.label_encoders[col].transform(df[col])
         
         return df
     
     def scale_features(self, df: pd.DataFrame, fit: bool = True) -> pd.DataFrame:
-        """
-        Scale numerical features
-        
-        Args:
-            df: Input DataFrame
-            fit: Whether to fit scaler
-            
-        Returns:
-            DataFrame with scaled features
-        """
+        """Scale numerical features."""
         df = df.copy()
         
-        # Exclude ID columns and target
         exclude_cols = ['TransactionId', 'BatchId', 'AccountId', 'SubscriptionId', 
-                       'CustomerId', 'ProductId', 'FraudResult', 'is_high_risk']
+                       'CustomerId', 'ProductId', settings.TARGET_COL, 'is_high_risk']
         
         numeric_cols = df.select_dtypes(include=[np.number]).columns
         numeric_cols = [col for col in numeric_cols if col not in exclude_cols]
         
+        if not numeric_cols:
+            return df
+
         if fit:
             df[numeric_cols] = self.scaler.fit_transform(df[numeric_cols])
         else:
@@ -377,51 +363,37 @@ class DataPreprocessor:
     def prepare_features_target(
         self,
         df: pd.DataFrame,
-        target_col: str = 'FraudResult',
-        test_size: float = 0.2,
-        random_state: int = 42
+        target_col: str = settings.TARGET_COL,
+        test_size: float = settings.TEST_SIZE,
+        random_state: int = settings.RANDOM_STATE
     ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
-        """
-        Prepare features and target for modeling
+        """Prepare features and target for modeling."""
         
-        Args:
-            df: Input DataFrame
-            target_col: Name of target column
-            test_size: Proportion of test set
-            random_state: Random seed
-            
-        Returns:
-            X_train, X_test, y_train, y_test
-        """
-        # Separate features and target
-        feature_cols = [col for col in df.columns if col != target_col 
-                       and col not in ['TransactionId', 'BatchId', 'AccountId', 
-                                      'SubscriptionId', 'CustomerId', 'ProductId',
-                                      'TransactionStartTime', 'FraudResult', 'is_high_risk']]
+        # Identify feature columns (exclude IDs and Target)
+        # Using a deny-list approach
+        exclude_cols = ['TransactionId', 'BatchId', 'AccountId', 
+                        'SubscriptionId', 'CustomerId', 'ProductId',
+                        settings.DATE_COL, target_col, 'is_high_risk']
+                        
+        feature_cols = [col for col in df.columns if col not in exclude_cols]
         
         X = df[feature_cols]
         y = df[target_col]
         
-        # Store feature columns
         self.feature_columns = feature_cols
         
-        # Determine if stratification is safe
+        # Check stratification
         n_samples = len(X)
         n_test_samples = int(n_samples * test_size)
         n_train_samples = n_samples - n_test_samples
         
-        # Check if we have enough samples for stratification
-        # Need at least 2 samples per class in both train and test
         can_stratify = True
         if n_test_samples < 2 or n_train_samples < 2:
             can_stratify = False
         else:
-            # Check class distribution
-            class_counts = y.value_counts()
-            if class_counts.min() < 2:
+            if y.value_counts().min() < 2:
                 can_stratify = False
         
-        # Train-test split with conditional stratification
         X_train, X_test, y_train, y_test = train_test_split(
             X, y,
             test_size=test_size,
@@ -430,6 +402,5 @@ class DataPreprocessor:
         )
         
         print(f"Training set: {X_train.shape}, Test set: {X_test.shape}")
-        print(f"Fraud rate - Train: {y_train.mean():.4f}, Test: {y_test.mean():.4f}")
         
         return X_train, X_test, y_train, y_test
