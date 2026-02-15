@@ -1,53 +1,55 @@
 """
 RFM Analysis Module
-Calculate Recency, Frequency, Monetary metrics and create proxy target variable
+Calculate Recency, Frequency, Monetary metrics and create proxy target variable.
+Refactored to use centralized configuration and improved type hinting.
 """
 
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+from typing import Tuple, Optional
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
-from typing import Tuple
 
+from src.config import settings
 
 class RFMAnalyzer:
     """
-    RFM (Recency, Frequency, Monetary) Analysis for customer segmentation
-    Creates a proxy target variable 'is_high_risk' based on RFM clustering
+    RFM (Recency, Frequency, Monetary) Analysis for customer segmentation.
+    Creates a proxy target variable 'is_high_risk' based on RFM clustering.
     """
     
-    def __init__(self, snapshot_date: str = None):
+    def __init__(self, snapshot_date: Optional[str] = None):
         """
-        Initialize RFM Analyzer
+        Initialize RFM Analyzer.
         
         Args:
-            snapshot_date: Reference date for recency calculation (format: YYYY-MM-DD)
-                         If None, uses the maximum transaction date in dataset
+            snapshot_date: Reference date for recency calculation (format: YYYY-MM-DD).
+                         If None, uses the maximum transaction date in dataset + 1 day.
         """
         self.snapshot_date = snapshot_date
         self.scaler = StandardScaler()
-        self.kmeans = None
-        self.rfm_data = None
+        self.kmeans: Optional[KMeans] = None
+        self.rfm_data: Optional[pd.DataFrame] = None
         
     def calculate_rfm(
         self, 
         df: pd.DataFrame,
         customer_col: str = 'CustomerId',
-        date_col: str = 'TransactionStartTime',
+        date_col: str = settings.DATE_COL,
         amount_col: str = 'Amount'
     ) -> pd.DataFrame:
         """
-        Calculate RFM metrics per customer
+        Calculate RFM metrics per customer.
         
         Args:
-            df: Transaction DataFrame
-            customer_col: Name of customer ID column
-            date_col: Name of transaction date column
-            amount_col: Name of transaction amount column
+            df: Transaction DataFrame.
+            customer_col: Name of customer ID column.
+            date_col: Name of transaction date column.
+            amount_col: Name of transaction amount column.
             
         Returns:
-            DataFrame with RFM metrics per customer
+            pd.DataFrame: DataFrame with RFM metrics per customer.
         """
         # Ensure datetime format
         df = df.copy()
@@ -62,16 +64,18 @@ class RFMAnalyzer:
         print(f"RFM Analysis Snapshot Date: {snapshot_dt}")
         
         # Calculate RFM metrics
+        # lambda x: (snapshot_dt - x.max()).days  <-- Recency
         rfm = df.groupby(customer_col).agg({
-            date_col: lambda x: (snapshot_dt - x.max()).days,  # Recency
-            customer_col: 'count',  # Frequency
-            amount_col: 'sum'  # Monetary
+            date_col: lambda x: (snapshot_dt - x.max()).days,
+            customer_col: 'count',
+            amount_col: 'sum'
+        }).rename(columns={
+            date_col: 'Recency',
+            customer_col: 'Frequency',
+            amount_col: 'Monetary'
         }).reset_index()
         
-        # Rename columns
-        rfm.columns = [customer_col, 'Recency', 'Frequency', 'Monetary']
-        
-        # Handle negative recency (transactions after snapshot date)
+        # Handle negative recency (transactions unlikely after snapshot, but possible if data dirty)
         rfm['Recency'] = rfm['Recency'].clip(lower=0)
         
         print(f"RFM calculated for {len(rfm)} customers")
@@ -84,13 +88,13 @@ class RFMAnalyzer:
     
     def preprocess_rfm(self, rfm_df: pd.DataFrame) -> pd.DataFrame:
         """
-        Scale RFM features before clustering
+        Scale RFM features before clustering.
         
         Args:
-            rfm_df: DataFrame with RFM metrics
+            rfm_df: DataFrame with RFM metrics.
             
         Returns:
-            DataFrame with scaled RFM features
+            pd.DataFrame: DataFrame with scaled RFM features.
         """
         rfm_scaled = rfm_df.copy()
         
@@ -105,18 +109,18 @@ class RFMAnalyzer:
         self, 
         rfm_scaled: pd.DataFrame,
         n_clusters: int = 3,
-        random_state: int = 42
+        random_state: int = settings.RANDOM_STATE
     ) -> pd.DataFrame:
         """
-        Perform K-Means clustering on scaled RFM features
+        Perform K-Means clustering on scaled RFM features.
         
         Args:
-            rfm_scaled: DataFrame with scaled RFM features
-            n_clusters: Number of clusters (default: 3)
-            random_state: Random seed for reproducibility
+            rfm_scaled: DataFrame with scaled RFM features.
+            n_clusters: Number of clusters (default: 3).
+            random_state: Random seed for reproducibility.
             
         Returns:
-            DataFrame with cluster assignments
+            pd.DataFrame: DataFrame with cluster assignments.
         """
         # Extract features for clustering
         X = rfm_scaled[['Recency', 'Frequency', 'Monetary']].values
@@ -133,21 +137,20 @@ class RFMAnalyzer:
     def create_risk_target(
         self, 
         rfm_clustered: pd.DataFrame,
-        high_risk_cluster: int = None
+        high_risk_cluster: Optional[int] = None
     ) -> pd.DataFrame:
         """
-        Create binary 'is_high_risk' target variable
-        
+        Create binary 'is_high_risk' target variable.
         Strategy: Customers with high recency, low frequency, and low monetary value
-        are considered high risk (likely to have fraudulent/abandoned accounts)
+        are considered high risk.
         
         Args:
-            rfm_clustered: DataFrame with cluster assignments
-            high_risk_cluster: Specific cluster to mark as high risk
-                              If None, automatically determine based on RFM profile
+            rfm_clustered: DataFrame with cluster assignments.
+            high_risk_cluster: Specific cluster to mark as high risk.
+                              If None, automatically determine based on RFM profile.
             
         Returns:
-            DataFrame with 'is_high_risk' column
+            pd.DataFrame: DataFrame with 'is_high_risk' column.
         """
         rfm_with_target = rfm_clustered.copy()
         
@@ -163,15 +166,16 @@ class RFMAnalyzer:
             print("\nCluster Analysis (scaled features):")
             print(cluster_analysis)
             
-            # Score each cluster: high recency is bad, high frequency/monetary is good
-            # Normalize scores to identify worst cluster
+            # Score each cluster: high recency is bad (+), high frequency/monetary is good (-)
+            # We want to find the cluster with Max(Recency - Frequency - Monetary)
+            # Since features are scaled, this simple linear combination works reasonably well for basic ranking.
             cluster_analysis['Risk_Score'] = (
                 cluster_analysis['Recency'] - 
                 cluster_analysis['Frequency'] - 
                 cluster_analysis['Monetary']
             )
             
-            high_risk_cluster = cluster_analysis['Risk_Score'].idxmax()
+            high_risk_cluster = int(cluster_analysis['Risk_Score'].idxmax())
             print(f"\nAutomatically identified high-risk cluster: {high_risk_cluster}")
         
         # Create binary target
@@ -193,15 +197,15 @@ class RFMAnalyzer:
         customer_col: str = 'CustomerId'
     ) -> pd.DataFrame:
         """
-        Merge proxy target back into main transaction dataset
+        Merge proxy target back into main transaction dataset.
         
         Args:
-            transactions_df: Original transaction DataFrame
-            rfm_with_target: RFM DataFrame with 'is_high_risk' column
-            customer_col: Name of customer ID column
+            transactions_df: Original transaction DataFrame.
+            rfm_with_target: RFM DataFrame with 'is_high_risk' column.
+            customer_col: Name of customer ID column.
             
         Returns:
-            Transaction DataFrame with 'is_high_risk' column
+            pd.DataFrame: Transaction DataFrame with 'is_high_risk' column.
         """
         # Select only customer ID and target
         target_mapping = rfm_with_target[[customer_col, 'is_high_risk']].copy()
@@ -226,24 +230,24 @@ class RFMAnalyzer:
         self,
         df: pd.DataFrame,
         customer_col: str = 'CustomerId',
-        date_col: str = 'TransactionStartTime',
+        date_col: str = settings.DATE_COL,
         amount_col: str = 'Amount',
         n_clusters: int = 3,
-        random_state: int = 42
+        random_state: int = settings.RANDOM_STATE
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
-        Execute complete RFM analysis pipeline
+        Execute complete RFM analysis pipeline.
         
         Args:
-            df: Transaction DataFrame
-            customer_col: Name of customer ID column
-            date_col: Name of transaction date column
-            amount_col: Name of transaction amount column
-            n_clusters: Number of clusters for K-Means
-            random_state: Random seed
+            df: Transaction DataFrame.
+            customer_col: Customer ID column.
+            date_col: Date column.
+            amount_col: Amount column.
+            n_clusters: Number of clusters.
+            random_state: Random seed.
             
         Returns:
-            Tuple of (transactions_with_target, rfm_with_target)
+            Tuple[pd.DataFrame, pd.DataFrame]: (transactions_with_target, rfm_with_target)
         """
         print("="*70)
         print("RFM ANALYSIS PIPELINE")
@@ -269,24 +273,3 @@ class RFMAnalyzer:
         print("="*70)
         
         return transactions_with_target, rfm_with_target
-
-
-# Example usage
-if __name__ == "__main__":
-    # Load sample data
-    import sys
-    from pathlib import Path
-    sys.path.append(str(Path(__file__).parent))
-    
-    from data_processing import DataLoader
-    
-    # Load data
-    loader = DataLoader('data/raw/data.csv')
-    data = loader.load_data()
-    
-    # Run RFM analysis
-    rfm_analyzer = RFMAnalyzer()
-    data_with_target, rfm_results = rfm_analyzer.full_rfm_pipeline(data)
-    
-    print("\nSample of transactions with proxy target:")
-    print(data_with_target[['CustomerId', 'Amount', 'FraudResult', 'is_high_risk']].head(10))
