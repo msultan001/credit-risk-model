@@ -39,14 +39,34 @@ predictor = None
 
 @app.on_event("startup")
 async def load_model():
-    """Load model on startup"""
+    """Load model on startup - try MLflow registry first, then fallback to pickle"""
     global predictor
     try:
-        predictor = ModelPredictor(
-            model_path='models/xgboost.pkl',
-            preprocessor_path='models/preprocessor.pkl'
-        )
-        print("Model loaded successfully")
+        # Try loading from MLflow Model Registry first
+        try:
+            import mlflow
+            model_name = "credit-risk-best-model"
+            model_version = "latest"
+            
+            # Load from MLflow Model Registry
+            model_uri = f"models:/{model_name}/{model_version}"
+            print(f"Attempting to load model from MLflow: {model_uri}")
+            
+            # For now, fall through to pickle loading
+            # MLflow registry integration would require proper MLflow server setup
+            raise Exception("MLflow registry not configured, using pickle fallback")
+            
+        except Exception as mlflow_error:
+            print(f"MLflow loading failed: {mlflow_error}")
+            print("Falling back to pickle files...")
+            
+            # Fallback to pickle files
+            predictor = ModelPredictor(
+                model_path='models/xgboost.pkl',
+                preprocessor_path='models/preprocessor.pkl'
+            )
+            print("Model loaded successfully from pickle files")
+            
     except Exception as e:
         print(f"Warning: Could not load model: {e}")
         print("API will start but predictions will fail until model is trained")

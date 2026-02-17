@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     DATE_COL: str = 'TransactionStartTime'
     TARGET_COL: str = 'FraudResult'
     
+    # Validation & Preprocessing
+    ID_COLS: List[str] = [
+        'TransactionId', 'BatchId', 'AccountId', 'SubscriptionId', 
+        'CustomerId', 'ProductId'
+    ]
+    UNKNOWN_CAT_LABEL: str = 'unknown'
+    
     # Model Training
     TEST_SIZE: float = 0.2
     RANDOM_STATE: int = 42

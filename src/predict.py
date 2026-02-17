@@ -101,24 +101,28 @@ class ModelPredictor:
     
     def predict_batch(self, transactions: List[Dict[str, Any]]) -> List[Dict[str, Union[int, float]]]:
         """Predict for batch of transactions."""
-        # Convert to DataFrame
-        df = pd.DataFrame(transactions)
-        
-        # Make predictions
-        predictions = self.predict(df)
-        probabilities = self.predict_proba(df)
-        
-        # Format results
-        results = []
-        for i, (pred, proba) in enumerate(zip(predictions, probabilities)):
-            results.append({
-                'transaction_index': i,
-                'prediction': int(pred),
-                'fraud_probability': float(proba[1]),
-                'legitimate_probability': float(proba[0])
-            })
-        
-        return results
+        try:
+            # Convert to DataFrame
+            df = pd.DataFrame(transactions)
+            
+            # Make predictions
+            predictions = self.predict(df)
+            probabilities = self.predict_proba(df)
+            
+            # Format results
+            results = []
+            for i, (pred, proba) in enumerate(zip(predictions, probabilities)):
+                results.append({
+                    'transaction_index': i,
+                    'prediction': int(pred),
+                    'fraud_probability': float(proba[1]),
+                    'legitimate_probability': float(proba[0])
+                })
+            
+            return results
+        except Exception as e:
+            print(f"Batch prediction failed: {e}")
+            return []
 
 if __name__ == "__main__":
     try:

@@ -344,8 +344,7 @@ class DataPreprocessor:
         """Scale numerical features."""
         df = df.copy()
         
-        exclude_cols = ['TransactionId', 'BatchId', 'AccountId', 'SubscriptionId', 
-                       'CustomerId', 'ProductId', settings.TARGET_COL, 'is_high_risk']
+        exclude_cols = settings.ID_COLS + [settings.TARGET_COL, 'is_high_risk']
         
         numeric_cols = df.select_dtypes(include=[np.number]).columns
         numeric_cols = [col for col in numeric_cols if col not in exclude_cols]
@@ -371,9 +370,7 @@ class DataPreprocessor:
         
         # Identify feature columns (exclude IDs and Target)
         # Using a deny-list approach
-        exclude_cols = ['TransactionId', 'BatchId', 'AccountId', 
-                        'SubscriptionId', 'CustomerId', 'ProductId',
-                        settings.DATE_COL, target_col, 'is_high_risk']
+        exclude_cols = settings.ID_COLS + [settings.DATE_COL, target_col, 'is_high_risk']
                         
         feature_cols = [col for col in df.columns if col not in exclude_cols]
         

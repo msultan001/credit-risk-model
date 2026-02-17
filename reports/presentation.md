@@ -1,46 +1,40 @@
-# Credit Risk Model Presentation
+# Credit Risk Modeling for Financial Inclusion
 
-## Slide 1: Title Slide
-**Credit Risk Modeling for Financial Inclusion**
-*Bridging the gap with Alternative Data*
-[Your Name]
+## Executive Summary
+This project aims to minimize default risk and improve financial inclusion by developing a robust machine learning pipeline for credit scoring. By leveraging alternative data sources (transaction logs) and advanced modeling techniques (XGBoost, Random Forest), we successfully identify high-risk transactions with high accuracy.
 
-## Slide 2: The Problem
-- **Financial Exclusion**: High percentage of population in emerging markets is unbanked.
-- **Data Gap**: Lack of traditional credit bureau data (FICO).
-- **Business Risk**: Lenders cannot assess risk accurately without data.
+## Business Problem
+**Context**: In emerging markets, traditional credit scores are often unavailable. Financial institutions struggle to lend to unbanked populations due to lack of credit history.
+**Objective**: Build a proxy credit risk score using mobile money transaction data to predict default/fraud probability.
+**Impact**:
+- **Risk Reduction**: Flagging fraudulent/high-risk transactions before approval.
+- **Revenue Growth**: Safely expanding the loan book to previously underserved customers.
 
-## Slide 3: The Solution
-- **Alternative Data**: Utilizing mobile money transaction logs.
-- **Proxy Modeling**: Creating a "Good" vs "Bad" borrower definition using behavioral analysis (RFM).
-- **Machine Learning**: Predicting future risk based on transaction patterns.
+## Technical Solution
 
-## Slide 4: Methodology (RFM Analysis)
-- **Recency**: Days since last activity.
-- **Frequency**: Count of transactions.
-- **Monetary**: Total value derived.
-- **Clustering**: K-Means to group customers.
-- **Labeling**: "High Risk" = Inactive + Low Volume.
+### 1. Data Pipeline & Engineering
+- **Data Source**: Transactional data (Amount, Value, Channel, Provider, Time).
+- **Feature Engineering**:
+    - **RFM Analysis**: Recency, Frequency, Monetary value aggregates.
+    - **WoE (Weight of Evidence)**: Transforming categorical variables for better stability.
+    - **Temporal Features**: Hour of day, day of week patterns.
+- **Infrastructure**: Modular Python codebase with `pydantic` configuration and `pytest` coverage.
 
-## Slide 5: Technical Architecture
-- **Tech Stack**: Python, Pandas, Scikit-Learn, XGBoost, Streamlit.
-- **MLOps**: MLflow for tracking, Docker for containerization, GitHub Actions for CI/CD.
-- **Design**: Modular, Object-Oriented, Type-Safe.
+### 2. Modeling Strategy
+- **Models Evaluated**: Logistic Regression, Random Forest, XGBoost.
+- **Winning Model**: XGBoost (demonstrated highest ROC-AUC of ~0.xx).
+- **Explainability**: Integrated SHAP (SHapley Additive exPlanations) to provide individual-level reasons for every credit decision (e.g., "High transaction value in late hours increases risk").
 
-## Slide 6: Model Performance
-- **XGBoost** outperformed Logistic Regression.
-- **ROC-AUC**: 0.91 (Excellent discrimination).
-- **Precision**: 0.78 (Minimizing false positives/bad loans).
+### 3. Deployment & Monitoring
+- **Dashboard**: Interactive Streamlit application for loan officers to view risk scores and feature contributions.
+- **CI/CD**: GitHub Actions pipeline ensures code quality and automated testing on every commit.
 
-## Slide 7: Interpretability & Compliance
-- **Basel II Alignment**: Model transparency is key.
-- **SHAP Values**: quantifying feature contribution.
-- **Dashboard**: Interactive tool for risk officers to review cases.
+## Key Insights
+- **Transaction Frequency**: High-frequency users tend to be lower risk.
+- **Channel Impact**: Specific channels (e.g., Aggregator vs. Agent) show distinct risk profiles.
+- **Time of Day**: Fraudulent attempts peak during non-business hours.
 
-## Slide 8: Future Roadmap
-- **Deployment**: API deployment on Kubernetes.
-- **Monitoring**: Drift detection (Evidently AI).
-- **Features**: Graph-based features (network analysis).
-
-## Slide 9: Q&A
-*Thank you!*
+## Future Improvements
+- **Real-time Serving**: Deploying the model as a FastAPI microservice.
+- **Model Retraining**: Implementing drift detection to trigger automated retraining.
+- **Alternative Data**: Incorporating geo-location and social graph data.

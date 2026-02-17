@@ -1,6 +1,6 @@
 # Credit Risk Modeling for Financial Inclusion 🚀
 
-![CI/CD Pipeline](https://github.com/Start-Tech-Academy/Credit-Risk-Model/actions/workflows/ci.yml/badge.svg)
+![CI/CD Pipeline](https://github.com/msultan001/credit-risk-model/actions/workflows/ci.yml/badge.svg)
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
@@ -106,10 +106,10 @@ streamlit run src/dashboard.py
 
 ## 📊 Key Features
 
-- **Engineering Excellence**: 
+- **Engineering Excellence**:
   - Modular, object-oriented code with type hinting.
   - Centralized configuration using `pydantic`.
-  - Comprehensive unit taxes with `pytest`.
+  - Comprehensive unit tests with `pytest`.
   
 - **MLOps Integration**:
   - Experiment tracking with **MLflow**.

@@ -159,11 +159,7 @@ def main():
             submitted = st.form_submit_button("Predict Risk")
             
         if submitted:
-            # Create input dict (simplified, missing dates/others will be handled by preprocessor defaults if robust)
-            # Note: Our preprocessor expects certain columns. We need to respect that.
-            # The current preprocessor needs TransactionStartTime for feature engineering.
-            # We'll mock it for the demo.
-            
+            # Create input dict
             input_data = {
                 'Amount': amount,
                 'Value': value,
@@ -200,56 +196,47 @@ def main():
                 # SHAP Explanation
                 st.subheader("Feature Contribution (SHAP)")
                 
-                # Prepare data for SHAP
-                # We need the transformed features. 
-                # ModelPredictor has `preprocess_input` but it returns the final array/df for prediction.
-                # XGBoost models in sklearn wrapper can use TreeExplainer.
-                
                 if hasattr(predictor.model, "get_booster") or isinstance(predictor.model, (type(shap.TreeExplainer),)):
-                    # Preprocess
-                    df_input = pd.DataFrame([input_data])
-                    X_processed = predictor.preprocess_input(df_input)
-                    
-                    # Explain
-                    explainer = shap.TreeExplainer(predictor.model)
-                    shap_values = explainer.shap_values(X_processed)
-                    
-                    # Force Plot
-                    st.markdown("**Why did the model make this decision?**")
-                    # SHAP force plot requires JS, Streamlit supports it via _html
-                    # For simplicity in Streamlit, bar plot of top features is often better/stable
-                    
-                    # Summary Plot (Global) - needs background data, skipping for single instance
-                    
-                    # Local Bar Plot
-                    # shap.plots.bar(shap_values[0]) -> matplotlib figure
-                    fig_shap, ax_shap = plt.subplots()
-                    # We need to manually match feature names if X_processed is numpy
-                    feature_names = X_processed.columns if isinstance(X_processed, pd.DataFrame) else None
-                    
-                    # Create a simple bar chart of SHAP values
-                    if isinstance(shap_values, list): # Multi-class
-                        sv = shap_values[1][0] # Positive class
-                    else:
-                         sv = shap_values[0]
-                         
-                    # Create DataFrame for plotting
-                    shap_df = pd.DataFrame({
-                        'Feature': feature_names if feature_names is not None else [f"Feature {i}" for i in range(len(sv))],
-                        'SHAP Value': sv
-                    })
-                    shap_df['Abs Value'] = shap_df['SHAP Value'].abs()
-                    shap_df = shap_df.sort_values('Abs Value', ascending=False).head(10)
-                    
-                    sns.barplot(data=shap_df, x='SHAP Value', y='Feature', ax=ax_shap)
-                    st.pyplot(fig_shap)
-                    
+                    try:
+                        # Preprocess
+                        df_input = pd.DataFrame([input_data])
+                        X_processed = predictor.preprocess_input(df_input)
+                        
+                        # Explain
+                        explainer = shap.TreeExplainer(predictor.model)
+                        shap_values = explainer.shap_values(X_processed)
+                        
+                        # Handle varied SHAP output formats (list for multiclass, array for binary)
+                        if isinstance(shap_values, list): 
+                            sv = shap_values[1][0] 
+                        elif len(shap_values.shape) > 1 and shap_values.shape[0] == 1:
+                             sv = shap_values[0]
+                        else:
+                             sv = shap_values
+                             
+                        # Feature Names
+                        feature_names = X_processed.columns if isinstance(X_processed, pd.DataFrame) else [f"Feature {i}" for i in range(len(sv))]
+
+                        # Create DataFrame for plotting
+                        shap_df = pd.DataFrame({
+                            'Feature': feature_names,
+                            'SHAP Value': sv
+                        })
+                        shap_df['Abs Value'] = shap_df['SHAP Value'].abs()
+                        shap_df = shap_df.sort_values('Abs Value', ascending=False).head(10)
+                        
+                        fig_shap, ax_shap = plt.subplots(figsize=(10, 6))
+                        sns.barplot(data=shap_df, x='SHAP Value', y='Feature', ax=ax_shap, palette="viridis")
+                        ax_shap.set_title("Top 10 Features Influencing Prediction")
+                        st.pyplot(fig_shap)
+                        
+                    except Exception as e:
+                        st.warning(f"Could not generate SHAP plot: {e}")
                 else:
                     st.info("SHAP explanation available for Tree-based models (XGBoost/RandomForest).")
                     
             except Exception as e:
                 st.error(f"Prediction failed: {e}")
-                # st.exception(e) # For debugging
 
 if __name__ == "__main__":
     main()
